@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Video Player</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: #000;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #player-wrap {
+    position: relative;
+    width: 100vw;
+    height: 100vh;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #gd-iframe {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    border: none;
+  }
+
+  .blk {
+    position: absolute;
+    z-index: 100;
+    background: transparent;
+    pointer-events: auto;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none;
+  }
+
+  /* Оверлей запуска */
+  #play-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 200;
+    background: rgba(0,0,0,0.75);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #play-overlay.hidden { display: none; }
+
+  #play-btn {
+    width: 84px; height: 84px;
+    background: rgba(220,30,30,0.92);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 32px rgba(0,0,0,0.7);
+    transition: transform .15s;
+  }
+  #play-overlay:active #play-btn { transform: scale(0.92); }
+
+  #play-hint {
+    color: #fff;
+    font-family: sans-serif;
+    font-size: 15px;
+    font-weight: 500;
+    opacity: 0.85;
+    pointer-events: none;
+  }
+
+  /* Индикатор паузы/плея */
+  #tap-feedback {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%) scale(0);
+    width: 72px; height: 72px;
+    background: rgba(255,255,255,0.18);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 150;
+    pointer-events: none;
+    transition: transform .12s, opacity .3s;
+    opacity: 0;
+  }
+  #tap-feedback.show {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 1;
+  }
+
+  /* Оверлей блокировки когда Google показывает свои кнопки */
+  #gd-top-block {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 52px;
+    z-index: 100;
+    background: #000;
+    pointer-events: auto;
+  }
+  #gd-bot-block {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 52px;
+    z-index: 100;
+    background: #000;
+    pointer-events: auto;
+  }
+</style>
+</head>
+<body>
+
+<div id="player-wrap">
+
+  <!-- Чёрные полосы сверху и снизу — перекрывают UI Google Drive -->
+  <div id="gd-top-block"></div>
+  <div id="gd-bot-block"></div>
+
+  <iframe id="gd-iframe" allowfullscreen></iframe>
+
+  <!-- Оверлей запуска -->
+  <div id="play-overlay">
+    <div id="play-btn">
+      <svg width="34" height="34" viewBox="0 0 24 24" fill="white">
+        <polygon points="5 3 19 12 5 21"/>
+      </svg>
+    </div>
+    <span id="play-hint">Нажмите для просмотра</span>
+  </div>
+
+  <!-- Индикатор тапа -->
+  <div id="tap-feedback">
+    <svg id="tap-icon" width="28" height="28" viewBox="0 0 24 24" fill="white">
+      <polygon points="5 3 19 12 5 21"/>
+    </svg>
+  </div>
+
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════
+//  НАСТРОЙКА — вставь ID файла с Google Drive
+//
+//  Как найти FILE_ID:
+//  Ссылка вида: drive.google.com/file/d/  СЮДА  /view
+//  Скопируй только эту часть и вставь ниже
+// ════════════════════════════════════════════════════════
+var FILE_ID = 'ВАШ_FILE_ID_СЮДА';
+// ════════════════════════════════════════════════════════
+
+var wrap      = document.getElementById('player-wrap');
+var iframe    = document.getElementById('gd-iframe');
+var playOv    = document.getElementById('play-overlay');
+var tapFb     = document.getElementById('tap-feedback');
+var tapIcon   = document.getElementById('tap-icon');
+var blockers  = [];
+var isLoaded  = false;
+
+// ── Запуск ──
+function startVideo() {
+  playOv.classList.add('hidden');
+  iframe.src = 'https://drive.google.com/file/d/' + FILE_ID + '/preview';
+  isLoaded = true;
+  buildBlockers();
+}
+
+playOv.addEventListener('click', startVideo);
+playOv.addEventListener('touchend', function(e) { e.preventDefault(); startVideo(); });
+
+// ── Построить блокировщики поверх iframe ──
+function buildBlockers() {
+  blockers.forEach(function(b) { b.remove(); });
+  blockers = [];
+
+  var sw = wrap.offsetWidth;
+  var sh = wrap.offsetHeight;
+
+  function mkB(x, y, w, h, cur) {
+    var d = document.createElement('div');
+    d.className = 'blk';
+    d.style.left   = x + 'px';
+    d.style.top    = y + 'px';
+    d.style.width  = w + 'px';
+    d.style.height = h + 'px';
+    if (cur) d.style.cursor = cur;
+    wrap.appendChild(d);
+    blockers.push(d);
+    return d;
+  }
+
+  // Google Drive player показывает:
+  // — вверху: название файла + кнопки (скачать, открыть в Drive, меню)  ~52px
+  // — внизу: прогресс-бар + время + громкость + fullscreen             ~52px
+  // — внизу справа: кнопка fullscreen
+
+  var topH = 52;   // верхняя панель Google Drive
+  var botH = 56;   // нижняя панель Google Drive
+  var midH = sh - topH - botH;
+
+  // ТОП — закрываем чёрным (уже есть gd-top-block), добавляем блокировщик кликов
+  mkB(0, 0, sw, topH);
+
+  // ЛЕВО от центра (небольшая полоса — иногда появляются watermark)
+  mkB(0, topH, Math.round(sw * 0.08), midH);
+
+  // ПРАВО от центра
+  mkB(sw - Math.round(sw * 0.08), topH, Math.round(sw * 0.08), midH);
+
+  // НИЗ — закрываем чёрным (gd-bot-block) + блокировщик
+  mkB(0, sh - botH, sw, botH);
+
+  // ЦЕНТР — тап для паузы/плея
+  // Google Drive не поддерживает postMessage поэтому тап просто кликает по iframe
+  // (браузер сам передаёт клик внутрь — это единственный способ управлять плеером GDrive)
+  var centerW = Math.round(sw * 0.5);
+  var centerH = Math.round(midH * 0.6);
+  var cx = Math.round((sw - centerW) / 2);
+  var cy = topH + Math.round((midH - centerH) / 2);
+
+  // Центральная зона — НЕ блокируем, клики проходят к iframe (пауза/плей)
+  // Вместо этого показываем визуальный фидбек
+  var centerIndicator = document.createElement('div');
+  centerIndicator.className = 'blk';
+  centerIndicator.style.cssText = 'left:' + cx + 'px;top:' + cy + 'px;' +
+    'width:' + centerW + 'px;height:' + centerH + 'px;' +
+    'z-index:100;background:transparent;pointer-events:auto;cursor:pointer';
+  centerIndicator.addEventListener('click', function() { showFeedback(); });
+  centerIndicator.addEventListener('touchend', function(e) {
+    e.preventDefault();
+    showFeedback();
+    // Пробрасываем клик к iframe
+    var rect = iframe.getBoundingClientRect();
+    var cx2 = rect.left + rect.width / 2;
+    var cy2 = rect.top + rect.height / 2;
+    iframe.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: cx2, clientY: cy2 }));
+  });
+  wrap.appendChild(centerIndicator);
+  blockers.push(centerIndicator);
+}
+
+// ── Визуальный фидбек тапа ──
+var fbTimer;
+var tapState = true; // true=play, false=pause
+function showFeedback() {
+  tapState = !tapState;
+  tapIcon.innerHTML = tapState
+    ? '<polygon points="5 3 19 12 5 21" fill="white"/>'
+    : '<rect x="5" y="3" width="4" height="18" fill="white"/><rect x="15" y="3" width="4" height="18" fill="white"/>';
+  tapFb.classList.add('show');
+  clearTimeout(fbTimer);
+  fbTimer = setTimeout(function() { tapFb.classList.remove('show'); }, 700);
+}
+
+// ── Resize ──
+window.addEventListener('resize', function() {
+  if (isLoaded) buildBlockers();
+});
+
+// ── Android кнопка "назад" — остаёмся на странице ──
+history.pushState(null, '');
+window.addEventListener('popstate', function() {
+  history.pushState(null, '');
+});
+
+// ── Запрет контекстного меню ──
+document.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+document.addEventListener('selectstart', function(e) { e.preventDefault(); });
+</script>
+</body>
+</html>
